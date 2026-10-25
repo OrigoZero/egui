@@ -2,7 +2,7 @@ use jiff::civil::{Date, Weekday};
 
 use egui::{Align, Button, Color32, ComboBox, Direction, Id, Layout, RichText, Ui, Vec2};
 
-use super::{button::DatePickerButtonState, month_data};
+use super::{DatePickerTranslations, button::DatePickerButtonState, month_data};
 
 use crate::{Column, Size, StripBuilder, TableBuilder};
 
@@ -35,11 +35,13 @@ pub(crate) struct DatePickerPopup<'a> {
     pub start_end_years: Option<std::ops::RangeInclusive<i16>>,
     pub reverse_years: bool,
     pub year_scroll_to: Option<i16>,
+    pub translations: &'a DatePickerTranslations,
 }
 
 impl DatePickerPopup<'_> {
     /// Returns `true` if user pressed `Save` button.
     pub fn draw(&mut self, ui: &mut Ui) -> bool {
+        let words = self.translations;
         let id = ui.make_persistent_id("date_picker");
         let today = jiff::Zoned::now().date();
         let mut popup_state = ui
@@ -126,14 +128,14 @@ impl DatePickerPopup<'_> {
                             });
                             strip.cell(|ui| {
                                 ComboBox::from_id_salt("date_picker_month")
-                                    .selected_text(month_name(popup_state.month))
+                                    .selected_text(words.month(popup_state.month))
                                     .show_ui(ui, |ui| {
                                         for month in 1i8..=12 {
                                             if ui
                                                 .selectable_value(
                                                     &mut popup_state.month,
                                                     month,
-                                                    month_name(month),
+                                                    words.month(month),
                                                 )
                                                 .changed()
                                             {
@@ -180,7 +182,7 @@ impl DatePickerPopup<'_> {
                                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
                                     if ui
                                         .button("<<<")
-                                        .on_hover_text("subtract one year")
+                                        .on_hover_text(words.subtract_year.as_str())
                                         .clicked()
                                     {
                                         popup_state.year -= 1;
@@ -196,7 +198,7 @@ impl DatePickerPopup<'_> {
                                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
                                     if ui
                                         .button("<<")
-                                        .on_hover_text("subtract one month")
+                                        .on_hover_text(words.subtract_month.as_str())
                                         .clicked()
                                     {
                                         popup_state.month -= 1;
@@ -214,7 +216,7 @@ impl DatePickerPopup<'_> {
                             });
                             strip.cell(|ui| {
                                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
-                                    if ui.button("<").on_hover_text("subtract one day").clicked() {
+                                    if ui.button("<").on_hover_text(words.subtract_day.as_str()).clicked() {
                                         popup_state.day -= 1;
                                         if popup_state.day == 0 {
                                             popup_state.month -= 1;
@@ -232,7 +234,7 @@ impl DatePickerPopup<'_> {
                             });
                             strip.cell(|ui| {
                                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
-                                    if ui.button(">").on_hover_text("add one day").clicked() {
+                                    if ui.button(">").on_hover_text(words.add_day.as_str()).clicked() {
                                         popup_state.day += 1;
                                         if popup_state.day > popup_state.last_day_of_month() {
                                             popup_state.day = 1;
@@ -250,7 +252,7 @@ impl DatePickerPopup<'_> {
                             });
                             strip.cell(|ui| {
                                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
-                                    if ui.button(">>").on_hover_text("add one month").clicked() {
+                                    if ui.button(">>").on_hover_text(words.add_month.as_str()).clicked() {
                                         popup_state.month += 1;
                                         if popup_state.month > 12 {
                                             popup_state.month = 1;
@@ -266,7 +268,7 @@ impl DatePickerPopup<'_> {
                             });
                             strip.cell(|ui| {
                                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
-                                    if ui.button(">>>").on_hover_text("add one year").clicked() {
+                                    if ui.button(">>>").on_hover_text(words.add_year.as_str()).clicked() {
                                         popup_state.year += 1;
                                         popup_state.day =
                                             popup_state.day.min(popup_state.last_day_of_month());
@@ -292,19 +294,18 @@ impl DatePickerPopup<'_> {
                                         ui.with_layout(
                                             Layout::centered_and_justified(Direction::TopDown),
                                             |ui| {
-                                                ui.label("Week");
+                                                ui.label(words.week.as_str());
                                             },
                                         );
                                     });
                                 }
 
-                                //TODO(elwerene): Locale
-                                for name in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] {
+                                for name in &words.weekdays {
                                     header.col(|ui| {
                                         ui.with_layout(
                                             Layout::centered_and_justified(Direction::TopDown),
                                             |ui| {
-                                                ui.label(name);
+                                                ui.label(name.as_str());
                                             },
                                         );
                                     });
@@ -403,14 +404,14 @@ impl DatePickerPopup<'_> {
                         strip.empty();
                         strip.cell(|ui| {
                             ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
-                                if ui.button("Cancel").clicked() {
+                                if ui.button(words.cancel.as_str()).clicked() {
                                     close = true;
                                 }
                             });
                         });
                         strip.cell(|ui| {
                             ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
-                                if ui.button("Save").clicked() {
+                                if ui.button(words.save.as_str()).clicked() {
                                     *self.selection = Date::new(
                                         popup_state.year,
                                         popup_state.month,
@@ -436,23 +437,5 @@ impl DatePickerPopup<'_> {
         }
 
         saved && close
-    }
-}
-
-fn month_name(i: i8) -> &'static str {
-    match i {
-        1 => "January",
-        2 => "February",
-        3 => "March",
-        4 => "April",
-        5 => "May",
-        6 => "June",
-        7 => "July",
-        8 => "August",
-        9 => "September",
-        10 => "October",
-        11 => "November",
-        12 => "December",
-        _ => panic!("Unknown month: {i}"),
     }
 }

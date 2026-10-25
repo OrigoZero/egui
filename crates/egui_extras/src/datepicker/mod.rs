@@ -2,8 +2,10 @@
 
 mod button;
 mod popup;
+mod translations;
 
 pub use button::DatePickerButton;
+pub use translations::DatePickerTranslations;
 use jiff::civil::{Date, ISOWeekDate, Weekday};
 
 #[derive(Debug)]

@@ -22,7 +22,7 @@ mod strip;
 mod table;
 
 #[cfg(feature = "datepicker")]
-pub use crate::datepicker::DatePickerButton;
+pub use crate::datepicker::{DatePickerButton, DatePickerTranslations};
 
 pub(crate) use crate::layout::StripLayout;
 pub use crate::sizing::Size;
