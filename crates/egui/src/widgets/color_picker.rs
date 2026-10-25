@@ -313,16 +313,19 @@ fn color_picker_hsvag_2d(ui: &mut Ui, hsvag: &mut HsvaGamma, alpha: Alpha) {
         }
     }
 
+    let words = ui.ctx().translations();
+    let words = &words.color_picker;
+
     let current_color_size = vec2(ui.spacing().slider_width, ui.spacing().interact_size.y);
-    show_color(ui, *hsvag, current_color_size).on_hover_text("Selected color");
+    show_color(ui, *hsvag, current_color_size).on_hover_text(words.selected_color.as_str());
 
     if alpha == Alpha::BlendOrAdditive {
         let a = &mut hsvag.a;
         let mut additive = is_additive_alpha(*a);
         ui.horizontal(|ui| {
-            ui.label("Blending:");
-            ui.radio_value(&mut additive, false, "Normal");
-            ui.radio_value(&mut additive, true, "Additive");
+            ui.label(words.blending.as_str());
+            ui.radio_value(&mut additive, false, words.normal_blending.as_str());
+            ui.radio_value(&mut additive, true, words.additive_blending.as_str());
 
             if additive {
                 *a = -a.abs();
@@ -339,11 +342,11 @@ fn color_picker_hsvag_2d(ui: &mut Ui, hsvag: &mut HsvaGamma, alpha: Alpha) {
     let HsvaGamma { h, s, v, a: _ } = hsvag;
 
     if false {
-        color_slider_1d(ui, s, |s| HsvaGamma { s, ..opaque }.into()).on_hover_text("Saturation");
+        color_slider_1d(ui, s, |s| HsvaGamma { s, ..opaque }.into()).on_hover_text(words.saturation.as_str());
     }
 
     if false {
-        color_slider_1d(ui, v, |v| HsvaGamma { v, ..opaque }.into()).on_hover_text("Value");
+        color_slider_1d(ui, v, |v| HsvaGamma { v, ..opaque }.into()).on_hover_text(words.value.as_str());
     }
 
     color_slider_2d(ui, s, v, |s, v| HsvaGamma { s, v, ..opaque }.into());
@@ -357,7 +360,7 @@ fn color_picker_hsvag_2d(ui: &mut Ui, hsvag: &mut HsvaGamma, alpha: Alpha) {
         }
         .into()
     })
-    .on_hover_text("Hue");
+    .on_hover_text(words.hue.as_str());
 
     let additive = is_additive_alpha(hsvag.a);
 
@@ -370,9 +373,9 @@ fn color_picker_hsvag_2d(ui: &mut Ui, hsvag: &mut HsvaGamma, alpha: Alpha) {
             if is_additive_alpha(*a) {
                 *a = 0.5; // was additive, but isn't allowed to be
             }
-            color_slider_1d(ui, a, |a| HsvaGamma { a, ..opaque }.into()).on_hover_text("Alpha");
+            color_slider_1d(ui, a, |a| HsvaGamma { a, ..opaque }.into()).on_hover_text(words.alpha.as_str());
         } else if !additive {
-            color_slider_1d(ui, a, |a| HsvaGamma { a, ..opaque }.into()).on_hover_text("Alpha");
+            color_slider_1d(ui, a, |a| HsvaGamma { a, ..opaque }.into()).on_hover_text(words.alpha.as_str());
         }
     }
 }
@@ -398,7 +401,7 @@ fn srgba_edit_ui(ui: &mut Ui, [r, g, b, a]: &mut [u8; 4], alpha: Alpha) -> bool 
 
         if ui
             .button("📋")
-            .on_hover_text("Click to copy color values")
+            .on_hover_text(ui.ctx().translations().color_picker.copy_values.as_str())
             .clicked()
         {
             if alpha == Alpha::Opaque {
@@ -439,7 +442,7 @@ fn rgba_edit_ui(ui: &mut Ui, [r, g, b, a]: &mut [f32; 4], alpha: Alpha) -> bool 
 
         if ui
             .button("📋")
-            .on_hover_text("Click to copy color values")
+            .on_hover_text(ui.ctx().translations().color_picker.copy_values.as_str())
             .clicked()
         {
             if alpha == Alpha::Opaque {
@@ -493,7 +496,8 @@ pub fn color_edit_button_hsva(ui: &mut Ui, hsva: &mut Hsva, alpha: Alpha) -> Res
     let open = Popup::is_id_open(ui.ctx(), popup_id);
     let mut button_response = color_button(ui, (*hsva).into(), open);
     if ui.style().explanation_tooltips {
-        button_response = button_response.on_hover_text("Click to edit color");
+        button_response = button_response
+            .on_hover_text(ui.ctx().translations().color_picker.edit_color.as_str());
     }
 
     const COLOR_SLIDER_WIDTH: f32 = 275.0;

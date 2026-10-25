@@ -2652,9 +2652,10 @@ pub enum NumericColorSpace {
 
 impl NumericColorSpace {
     pub fn toggle_button_ui(&mut self, ui: &mut Ui) -> crate::Response {
+        let words = ui.ctx().translations();
         let tooltip = match self {
-            Self::GammaByte => "Showing color values in 0-255 gamma space",
-            Self::Linear => "Showing color values in 0-1 linear space",
+            Self::GammaByte => words.color_picker.gamma_byte_space.as_str(),
+            Self::Linear => words.color_picker.linear_space.as_str(),
         };
 
         let mut response = ui.button(self.to_string()).on_hover_text(tooltip);
