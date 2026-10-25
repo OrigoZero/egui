@@ -1,4 +1,4 @@
-use super::popup::DatePickerPopup;
+use super::{DatePickerTranslations, popup::DatePickerPopup};
 use egui::{Area, Button, Frame, InnerResponse, Key, Order, RichText, Ui, Widget};
 use jiff::civil::Date;
 use std::ops::RangeInclusive;
@@ -23,6 +23,7 @@ pub struct DatePickerButton<'a> {
     start_end_years: Option<RangeInclusive<i16>>,
     reverse_years: bool,
     year_scroll_to: Option<i16>,
+    translations: &'a DatePickerTranslations,
 }
 
 impl<'a> DatePickerButton<'a> {
@@ -40,6 +41,7 @@ impl<'a> DatePickerButton<'a> {
             start_end_years: None,
             reverse_years: false,
             year_scroll_to: None,
+            translations: DatePickerTranslations::shared_english(),
         }
     }
 
@@ -134,6 +136,13 @@ impl<'a> DatePickerButton<'a> {
         self.year_scroll_to = Some(year);
         self
     }
+
+    /// The words the picker draws. (Default: [`DatePickerTranslations::english`])
+    #[inline]
+    pub fn translations(mut self, translations: &'a DatePickerTranslations) -> Self {
+        self.translations = translations;
+        self
+    }
 }
 
 impl Widget for DatePickerButton<'_> {
@@ -202,6 +211,7 @@ impl Widget for DatePickerButton<'_> {
                                 start_end_years: self.start_end_years,
                                 reverse_years: self.reverse_years,
                                 year_scroll_to: self.year_scroll_to,
+                                translations: self.translations,
                             }
                             .draw(ui)
                         })
