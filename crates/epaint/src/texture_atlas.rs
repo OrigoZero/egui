@@ -3,6 +3,9 @@ use emath::{Rect, remap_clamp};
 
 use crate::{ColorImage, ImageDelta, TextOptions};
 
+/// [`TextureAtlas::max_glyph_extent`] is the atlas side divided by this.
+const GLYPH_EXTENT_DIVISOR: usize = 8;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Rectu {
     /// inclusive
@@ -214,8 +217,30 @@ impl TextureAtlas {
         }
     }
 
+    /// The longest side, in texels, of a glyph the atlas places.
+    ///
+    /// A glyph whose rasterization is larger is rasterized at this extent and
+    /// drawn magnified over its box, so text of any size draws while a page
+    /// of glyphs at that extent still fits in the atlas.
+    pub fn max_glyph_extent(&self) -> usize {
+        self.image.width() / GLYPH_EXTENT_DIVISOR
+    }
+
+    /// The row the cursor restarts at when the atlas runs out of rows. The
+    /// rows above it hold the white texel, the discs and the glyphs drawn
+    /// first, which stay valid until the atlas is recreated.
+    fn restart_row(&self) -> usize {
+        self.max_height() / 3
+    }
+
     /// Returns the coordinates of where the rect ended up,
     /// and invalidates the region.
+    ///
+    /// The rect always lies inside the image, which never grows past the side
+    /// the atlas was created with. When the rows run out, the cursor restarts
+    /// at [`Self::restart_row`] and the rect is placed over glyphs placed
+    /// earlier; [`Self::fill_ratio`] then reads full, so the atlas is recreated
+    /// before the next pass.
     pub fn allocate(&mut self, (w, h): (usize, usize)) -> ((usize, usize), &mut ColorImage) {
         /// On some low-precision GPUs (my old iPad) characters get muddled up
         /// if we don't add some empty pixels between the characters.
@@ -228,6 +253,12 @@ impl TextureAtlas {
             w,
             self.image.width()
         );
+        assert!(
+            h <= self.max_height() - self.restart_row(),
+            "Tried to allocate a {} tall glyph in a texture atlas that places at most {} below the row it restarts at",
+            h,
+            self.max_height() - self.restart_row()
+        );
         if self.cursor.0 + w > self.image.width() {
             // New row:
             self.cursor.0 = 0;
@@ -237,16 +268,18 @@ impl TextureAtlas {
 
         self.row_height = self.row_height.max(h);
 
-        let required_height = self.cursor.1 + self.row_height;
-
-        if required_height > self.max_height() {
+        if self.cursor.1 + self.row_height > self.max_height() {
             // This is a bad place to be - we need to start reusing space :/
 
             log::warn!("epaint texture atlas overflowed!");
 
-            self.cursor = (0, self.image.height() / 3); // Restart a bit down - the top of the atlas has too many important things in it
+            self.cursor = (0, self.restart_row());
+            self.row_height = h;
             self.overflowed = true; // this will signal the user that we need to recreate the texture atlas next frame.
-        } else if resize_to_min_height(&mut self.image, required_height) {
+        }
+
+        let required_height = self.cursor.1 + self.row_height;
+        if self.grow_to_min_height(required_height) {
             self.dirty = Rectu::EVERYTHING;
         }
 
@@ -260,19 +293,86 @@ impl TextureAtlas {
 
         (pos, &mut self.image)
     }
+
+    /// Doubles the image's height until it holds `required_height` rows, at
+    /// most up to [`Self::max_height`]. Returns whether the image grew.
+    fn grow_to_min_height(&mut self, required_height: usize) -> bool {
+        let max_height = self.max_height();
+        while required_height > self.image.height() && self.image.height() < max_height {
+            self.image.size[1] = (self.image.size[1] * 2).min(max_height);
+        }
+
+        if self.image.width() * self.image.height() > self.image.pixels.len() {
+            self.image.pixels.resize(
+                self.image.width() * self.image.height(),
+                Color32::TRANSPARENT,
+            );
+            true
+        } else {
+            false
+        }
+    }
 }
 
-fn resize_to_min_height(image: &mut ColorImage, required_height: usize) -> bool {
-    while required_height >= image.height() {
-        image.size[1] *= 2; // double the height
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every rect the atlas hands out lies inside its image, and the image
+    /// stays inside the side it was created with, through the rows running
+    /// out and the cursor restarting, for rects up to the tallest it places.
+    #[test]
+    fn every_rect_lies_inside_the_image_through_an_overflow() {
+        const SIDE: usize = 2048;
+        let mut atlas = TextureAtlas::new([SIDE, 32], TextOptions::default());
+        let tallest = SIDE - SIDE / 3;
+        let sizes = [
+            (40, 60),
+            (300, 200),
+            (SIDE, 1),
+            (12, tallest),
+            (700, 900),
+            (5, 5),
+            (SIDE, tallest),
+            (256, 256),
+        ];
+        for round in 0..40 {
+            let (w, h) = sizes[round % sizes.len()];
+            let ((x, y), image) = atlas.allocate((w, h));
+            let [iw, ih] = image.size;
+            assert!(
+                x + w <= iw && y + h <= ih,
+                "round {round}: a {w}x{h} rect at ({x}, {y}) lies outside the {iw}x{ih} image"
+            );
+            assert!(
+                iw <= SIDE && ih <= SIDE,
+                "round {round}: image {iw}x{ih} past the {SIDE} side"
+            );
+            image[(x + w - 1, y + h - 1)] = Color32::WHITE;
+        }
+        assert_eq!(
+            atlas.fill_ratio(),
+            1.0,
+            "the rows ran out, so the atlas reads full"
+        );
     }
 
-    if image.width() * image.height() > image.pixels.len() {
-        image
-            .pixels
-            .resize(image.width() * image.height(), Color32::TRANSPARENT);
-        true
-    } else {
-        false
+    /// Rects that fill the atlas exactly to its last row grow it to its side
+    /// and no further.
+    #[test]
+    fn rows_ending_on_the_last_texel_keep_the_image_at_its_side() {
+        const SIDE: usize = 1024;
+        let mut atlas = TextureAtlas::new([SIDE, 32], TextOptions::default());
+        let ((_, mut y), _) = atlas.allocate((SIDE, 1));
+        let mut h = 1;
+        while SIDE - (y + h + 1) > 300 {
+            let (pos, _) = atlas.allocate((SIDE, 300));
+            (y, h) = (pos.1, 300);
+        }
+        let last = SIDE - (y + h + 1);
+        let ((_, y), image) = atlas.allocate((SIDE, last));
+        assert_eq!(y + last, SIDE, "the rect ends on the atlas's last row");
+        assert_eq!(image.size, [SIDE, SIDE]);
+        assert!(atlas.fill_ratio() <= 1.0, "nothing overflowed");
     }
 }
