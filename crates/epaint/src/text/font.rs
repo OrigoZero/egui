@@ -248,11 +248,20 @@ impl FontCell {
         })?;
 
         let bounds = path.control_box().expand();
-        let width = bounds.width() as u16;
-        let height = bounds.height() as u16;
+        // The glyph is rasterized at its size in pixels, or scaled down evenly
+        // to the largest extent the atlas places; its box in points stays
+        // the same either way.
+        let max_extent = atlas.max_glyph_extent();
+        let raster_scale = (max_extent as f64 / bounds.width().max(bounds.height())).min(1.0);
+        let raster_side =
+            |side: f64| ((side * raster_scale).ceil() as usize).min(max_extent) as u16;
+        let width = raster_side(bounds.width());
+        let height = raster_side(bounds.height());
 
         let mut ctx = vello_cpu::RenderContext::new(width, height);
-        ctx.set_transform(kurbo::Affine::translate((-bounds.x0, -bounds.y0)));
+        ctx.set_transform(
+            kurbo::Affine::scale(raster_scale) * kurbo::Affine::translate((-bounds.x0, -bounds.y0)),
+        );
         ctx.set_paint(color::OpaqueColor::<color::Srgb>::WHITE);
         ctx.fill_path(&path);
         let mut dest = vello_cpu::Pixmap::new(width, height);
@@ -279,7 +288,8 @@ impl FontCell {
                 offset_in_pixels / metrics.pixels_per_point + metrics.y_offset_in_points * Vec2::Y;
             UvRect {
                 offset,
-                size: vec2(width as f32, height as f32) / metrics.pixels_per_point,
+                size: vec2(bounds.width() as f32, bounds.height() as f32)
+                    / metrics.pixels_per_point,
                 min: [glyph_pos.0 as u16, glyph_pos.1 as u16],
                 max: [
                     (glyph_pos.0 + width as usize) as u16,

@@ -1300,6 +1300,69 @@ mod tests {
         }
     }
 
+    /// Text of any size lays out into glyphs that lie inside the atlas and
+    /// keep their size in points, pass after pass, in an atlas already
+    /// holding a page of text: a glyph larger than the atlas places is
+    /// rasterized at the largest extent it does.
+    #[test]
+    fn text_of_any_size_lays_out_inside_the_atlas() {
+        const SIDE: usize = 2048;
+        let options = TextOptions {
+            max_texture_side: SIDE,
+            ..Default::default()
+        };
+        let mut fonts = Fonts::new(options, FontDefinitions::default());
+        let page: String = (0..2000_u32)
+            .filter_map(|i| char::from_u32(0x21 + i % 0x5e))
+            .collect();
+        for size in [12.0, 18.0, 26.0, 40.0, 64.0, 96.0, 140.0, 200.0] {
+            fonts.begin_pass(options);
+            let _ = fonts.with_pixels_per_point(1.0).layout_no_wrap(
+                page.clone(),
+                FontId::proportional(size),
+                Color32::WHITE,
+            );
+        }
+        for pass in 0..2 {
+            for size in [1500.0, 2400.0, 6000.0] {
+                fonts.begin_pass(options);
+                let galley = fonts.with_pixels_per_point(1.0).layout_no_wrap(
+                    "Hg8".to_owned(),
+                    FontId::proportional(size),
+                    Color32::WHITE,
+                );
+                let [w, h] = fonts.font_image_size();
+                assert!(w <= SIDE && h <= SIDE, "pass {pass}: atlas {w}x{h}");
+                let glyphs: Vec<_> = galley.rows.iter().flat_map(|r| &r.row.glyphs).collect();
+                assert_eq!(glyphs.len(), 3);
+                for glyph in glyphs {
+                    let uv = glyph.uv_rect;
+                    assert!(!uv.is_nothing(), "pass {pass}: '{}' at {size}", glyph.chr);
+                    assert!(
+                        usize::from(uv.max[0]) <= w && usize::from(uv.max[1]) <= h,
+                        "pass {pass}: '{}' at {size} at {:?}..{:?} in {w}x{h}",
+                        glyph.chr,
+                        uv.min,
+                        uv.max
+                    );
+                    let texels =
+                        usize::from(uv.max[0] - uv.min[0]).max(usize::from(uv.max[1] - uv.min[1]));
+                    assert!(
+                        texels <= fonts.texture_atlas().max_glyph_extent(),
+                        "pass {pass}: '{}' at {size} spans {texels} texels",
+                        glyph.chr
+                    );
+                    assert!(
+                        uv.size.y > size * 0.5,
+                        "pass {pass}: '{}' at {size} is {} tall",
+                        glyph.chr,
+                        uv.size.y
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_fallback_glyph_width() {
         let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::empty());
