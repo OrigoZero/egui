@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::BTreeMap,
     sync::{
         Arc,
@@ -117,7 +116,7 @@ impl std::fmt::Display for FontFamily {
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct FontData {
     /// The content of a `.ttf` or `.otf` file.
-    pub font: Cow<'static, [u8]>,
+    pub font: FontBytes,
 
     /// Which font face in the file to use.
     /// When in doubt, use `0`.
@@ -130,15 +129,21 @@ pub struct FontData {
 impl FontData {
     pub fn from_static(font: &'static [u8]) -> Self {
         Self {
-            font: Cow::Borrowed(font),
+            font: FontBytes::Static(font),
             index: 0,
             tweak: Default::default(),
         }
     }
 
     pub fn from_owned(font: Vec<u8>) -> Self {
+        Self::from_shared(Arc::new(font))
+    }
+
+    /// Font bytes shared with every other holder of them: each [`FontsImpl`]
+    /// built from definitions holding this face reads the same allocation.
+    pub fn from_shared(font: Blob) -> Self {
         Self {
-            font: Cow::Owned(font),
+            font: FontBytes::Shared(font),
             index: 0,
             tweak: Default::default(),
         }
@@ -152,6 +157,61 @@ impl FontData {
 impl AsRef<[u8]> for FontData {
     fn as_ref(&self) -> &[u8] {
         self.font.as_ref()
+    }
+}
+
+// ----------------------------------------------------------------------------
+
+/// The content of a `.ttf` or `.otf` file: bytes the program holds for its
+/// whole run, or bytes shared with every other holder of them. Cloning it
+/// clones a reference to the bytes.
+#[derive(Clone)]
+pub enum FontBytes {
+    Static(&'static [u8]),
+    Shared(Blob),
+}
+
+impl AsRef<[u8]> for FontBytes {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Static(bytes) => bytes,
+            Self::Shared(bytes) => (**bytes).as_ref(),
+        }
+    }
+}
+
+impl std::ops::Deref for FontBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.as_ref()
+    }
+}
+
+impl std::fmt::Debug for FontBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FontBytes({} bytes)", self.as_ref().len())
+    }
+}
+
+impl PartialEq for FontBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for FontBytes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(self.as_ref())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for FontBytes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes: Vec<u8> = serde::Deserialize::deserialize(deserializer)?;
+        Ok(Self::Shared(Arc::new(bytes)))
     }
 }
 
@@ -212,9 +272,9 @@ impl Default for FontTweak {
 pub type Blob = Arc<dyn AsRef<[u8]> + Send + Sync>;
 
 fn blob_from_font_data(data: &FontData) -> Blob {
-    match data.clone().font {
-        Cow::Borrowed(bytes) => Arc::new(bytes) as Blob,
-        Cow::Owned(bytes) => Arc::new(bytes) as Blob,
+    match &data.font {
+        FontBytes::Static(bytes) => Arc::new(*bytes) as Blob,
+        FontBytes::Shared(bytes) => Arc::clone(bytes),
     }
 }
 
@@ -1370,5 +1430,27 @@ mod tests {
 
         let width = view.glyph_width(&FontId::new(12.0, FontFamily::Proportional), ' ');
         assert_eq!(width, 0.0);
+    }
+
+    /// A face given shared bytes is read from those bytes: every clone of its
+    /// definition, and the font each `FontsImpl` builds from it, holds the
+    /// same allocation.
+    #[test]
+    fn a_shared_face_is_read_from_the_bytes_it_was_given() {
+        let bytes: Blob = Arc::new(vec![7u8; 64]);
+        let data = FontData::from_shared(Arc::clone(&bytes));
+        for round in 0..2 {
+            let blob = blob_from_font_data(&data.clone());
+            assert!(
+                std::ptr::addr_eq(Arc::as_ptr(&blob), Arc::as_ptr(&bytes)),
+                "round {round}: the face reads the bytes it was given"
+            );
+        }
+        assert_eq!(&*data.font, &[7u8; 64][..]);
+        let owned = FontData::from_owned(vec![1, 2, 3]);
+        assert!(std::ptr::addr_eq(
+            Arc::as_ptr(&blob_from_font_data(&owned)),
+            Arc::as_ptr(&blob_from_font_data(&owned.clone()))
+        ));
     }
 }
