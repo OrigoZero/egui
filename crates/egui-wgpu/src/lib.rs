@@ -107,6 +107,7 @@ async fn request_adapter(
             // * fails if there's no software rasterizer available
             // * can achieve the same with `native_adapter_selector`
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
         .inspect_err(|_err| {
@@ -427,6 +428,7 @@ pub fn adapter_info_summary(info: &wgpu::AdapterInfo) -> String {
         subgroup_min_size,
         subgroup_max_size,
         transient_saves_memory,
+        limit_bucket,
     } = &info;
 
     // Example values:
@@ -464,7 +466,8 @@ pub fn adapter_info_summary(info: &wgpu::AdapterInfo) -> String {
     if *subgroup_min_size != 0 || *subgroup_max_size != 0 {
         summary += &format!(", subgroup_size: {subgroup_min_size}..={subgroup_max_size}");
     }
-    summary += &format!(", transient_saves_memory: {transient_saves_memory}");
+    summary += &format!(", transient_saves_memory: {transient_saves_memory:?}");
+    summary += &format!(", limit_bucket: {limit_bucket:?}");
 
     summary
 }
