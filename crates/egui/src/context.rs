@@ -1227,7 +1227,7 @@ impl Context {
     ///
     /// `allow_focus` should usually be true, unless you call this function multiple times with the
     /// same widget, then `allow_focus` should only be true once (like in [`Ui::new`] (true) and [`Ui::remember_min_rect`] (false)).
-    pub(crate) fn create_widget(
+    pub fn create_widget(
         &self,
         w: WidgetRect,
         allow_focus: bool,
@@ -1323,6 +1323,17 @@ impl Context {
         });
 
         res
+    }
+
+    /// Read the widgets this pass has registered so far, in the order each
+    /// layer received them.
+    ///
+    /// An integration that keeps the output of a part of its UI across passes
+    /// reads the widgets that part registered here, and registers them again
+    /// with [`Self::create_widget`] on a pass that does not run it, so hit
+    /// testing, focus order and hover see the same widgets either way.
+    pub fn pass_widget_rects<R>(&self, reader: impl FnOnce(&crate::WidgetRects) -> R) -> R {
+        self.write(|ctx| reader(&ctx.viewport().this_pass.widgets))
     }
 
     /// Read the response of some widget, which may be called _before_ creating the widget (!).
@@ -1860,6 +1871,21 @@ impl Context {
     #[must_use]
     pub fn has_requested_repaint_for(&self, viewport_id: &ViewportId) -> bool {
         self.read(|ctx| ctx.has_requested_repaint(viewport_id))
+    }
+
+    /// How many repaint requests the current viewport has received during
+    /// this pass.
+    ///
+    /// The count before and after a piece of UI runs says whether that piece
+    /// asked for another pass (an animation, a blinking caret, a pending
+    /// image), which [`Self::has_requested_repaint`] cannot say once anything
+    /// earlier in the pass has asked.
+    pub fn repaint_requests_this_pass(&self) -> usize {
+        self.read(|ctx| {
+            ctx.viewports
+                .get(&ctx.viewport_id())
+                .map_or(0, |v| v.repaint.causes.len())
+        })
     }
 
     /// Why are we repainting?
@@ -4395,6 +4421,94 @@ fn warn_if_rect_changes_id(
 #[cfg(test)]
 mod test {
     use super::Context;
+
+    /// The widgets a part of the UI registered, read back and registered again
+    /// on a pass that does not run that part, are the widgets the pass hit
+    /// tests: the pointer over one hovers it.
+    #[test]
+    fn widgets_registered_again_are_hit_tested() {
+        use crate::{Id, InteractOptions, LayerId, Pos2, RawInput, Rect, Sense, WidgetRect};
+        let ctx = Context::default();
+        let rect = Rect::from_min_size(Pos2::new(10.0, 10.0), crate::vec2(40.0, 20.0));
+        let id = Id::new("kept");
+        let mut kept: Vec<WidgetRect> = Vec::new();
+        let _ = ctx.run_ui(RawInput::default(), |ui| {
+            let before = ui.ctx().pass_widget_rects(|w| w.get_layer(ui.layer_id()).count());
+            let _ = ui.interact(rect, id, Sense::click());
+            kept = ui
+                .ctx()
+                .pass_widget_rects(|w| w.get_layer(ui.layer_id()).skip(before).copied().collect());
+        });
+        assert_eq!(kept.len(), 1, "the one widget the part registered is read back");
+        let input = RawInput {
+            events: vec![crate::Event::PointerMoved(Pos2::new(20.0, 20.0))],
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            let _ = ctx.run_ui(input.clone(), |ui| {
+                assert_eq!(kept[0].layer_id, ui.layer_id());
+                for w in &kept {
+                    let _ = ui.ctx().create_widget(*w, true, InteractOptions::default());
+                }
+            });
+        }
+        let hovered = ctx.run_ui(input, |ui| {
+            let response = ui.ctx().create_widget(kept[0], true, InteractOptions::default());
+            assert_eq!(response.layer_id, LayerId::background());
+            assert!(response.hovered(), "a widget registered again is hovered under the pointer");
+        });
+        drop(hovered);
+    }
+
+    /// The repaint requests a pass has received are counted, so the count
+    /// before and after a part of the UI runs says whether that part asked.
+    #[test]
+    fn repaint_requests_are_counted_within_a_pass() {
+        let ctx = Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let before = ui.ctx().repaint_requests_this_pass();
+            ui.ctx().request_repaint();
+            assert_eq!(ui.ctx().repaint_requests_this_pass(), before + 1);
+        });
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            assert_eq!(ui.ctx().repaint_requests_this_pass(), 0, "a new pass starts the count again");
+        });
+    }
+
+    /// New fonts are a new atlas, and its generation says so; a pass over the
+    /// same fonts keeps the atlas it had.
+    #[test]
+    fn new_fonts_are_a_new_atlas_generation() {
+        let ctx = Context::default();
+        let _ = ctx.run_ui(Default::default(), |_| {});
+        let first = ctx.fonts(|f| f.atlas_generation());
+        let _ = ctx.run_ui(Default::default(), |_| {});
+        assert_eq!(ctx.fonts(|f| f.atlas_generation()), first, "a pass keeps its atlas");
+        let mut fonts = crate::FontDefinitions::default();
+        if let Some(monospace) = fonts.families.get_mut(&crate::FontFamily::Monospace) {
+            monospace.reverse();
+        }
+        ctx.set_fonts(fonts);
+        let _ = ctx.run_ui(Default::default(), |_| {});
+        assert_ne!(ctx.fonts(|f| f.atlas_generation()), first, "new fonts lay glyphs into a new atlas");
+    }
+
+    /// Every layer a pass painted into is listed.
+    #[test]
+    fn graphic_layers_list_their_layers() {
+        use crate::{Id, LayerId, Order, Pos2, Rect, Shape};
+        let ctx = Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let overlay = LayerId::new(Order::Foreground, Id::new("overlay"));
+            ui.ctx().layer_painter(overlay).add(Shape::rect_filled(
+                Rect::from_min_size(Pos2::ZERO, crate::vec2(1.0, 1.0)),
+                0.0,
+                crate::Color32::RED,
+            ));
+            let layers: Vec<LayerId> = ui.ctx().graphics(|g| g.layer_ids().collect());
+            assert!(layers.contains(&overlay), "{layers:?}");
+        });
+    }
 
     #[test]
     fn test_single_pass() {
