@@ -701,6 +701,19 @@ impl FontsView<'_> {
         self.fonts.atlas.size()
     }
 
+    /// Which font atlas the glyphs of a [`Galley`] laid out now are placed
+    /// in: a value no other atlas of this process has had.
+    ///
+    /// The atlas is made again when the fonts or the text options change and
+    /// when it fills up, and a [`Galley`] laid out against an earlier atlas
+    /// points at glyphs the new one does not hold, so a galley kept across
+    /// passes is painted only while this value is the one it was laid out
+    /// under.
+    #[inline]
+    pub fn atlas_generation(&self) -> u64 {
+        self.fonts.atlas_generation
+    }
+
     /// Width of this character in points.
     ///
     /// If the font doesn't exist, this will return `0.0`.
@@ -822,6 +835,7 @@ impl FontsView<'_> {
 pub struct FontsImpl {
     definitions: FontDefinitions,
     atlas: TextureAtlas,
+    atlas_generation: u64,
     fonts_by_id: nohash_hasher::IntMap<FontFaceKey, FontFace>,
     fonts_by_name: ahash::HashMap<String, FontFaceKey>,
     family_cache: ahash::HashMap<FontFamily, CachedFamily>,
@@ -852,9 +866,11 @@ impl FontsImpl {
             fonts_by_name.insert(name.clone(), key);
         }
 
+        static ATLAS_GENERATION: AtomicU64 = AtomicU64::new(1);
         Self {
             definitions,
             atlas,
+            atlas_generation: ATLAS_GENERATION.fetch_add(1, Ordering::Relaxed),
             fonts_by_id,
             fonts_by_name,
             family_cache: Default::default(),
