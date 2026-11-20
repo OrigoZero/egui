@@ -212,11 +212,13 @@ impl Widget for &memory::InteractionState {
         let memory::InteractionState {
             potential_click_id,
             potential_drag_id,
+            long_touch_pos,
         } = self;
 
         ui.vertical(|ui| {
             ui.label(format!("potential_click_id: {potential_click_id:?}"));
             ui.label(format!("potential_drag_id: {potential_drag_id:?}"));
+            ui.label(format!("long_touch_pos: {long_touch_pos:?}"));
         })
         .response
     }
