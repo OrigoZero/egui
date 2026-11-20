@@ -138,10 +138,15 @@ pub(crate) fn interact(
         // Abort dragging on escape
         dragged = None;
         interaction.potential_drag_id = None;
+        interaction.long_touch_pos = None;
     }
 
     if input.is_long_touch() {
-        // We implement "press-and-hold for context menu" on touch screens here
+        // We implement "press-and-hold for context menu" on touch screens here.
+        // A widget that senses drags as well as clicks keeps its press: the
+        // hold is its secondary click, and the finger moving on from where
+        // it was held drags it, the way a touch platform carries an item a
+        // long press picked up.
         if let Some(widget) = interaction
             .potential_click_id
             .and_then(|id| widgets.get(id))
@@ -150,7 +155,11 @@ pub(crate) fn interact(
             clicked = Some(widget.id);
             long_touched = Some(widget.id);
             interaction.potential_click_id = None;
-            interaction.potential_drag_id = None;
+            if widget.sense.senses_drag() && interaction.potential_drag_id == Some(widget.id) {
+                interaction.long_touch_pos = input.pointer.latest_pos();
+            } else {
+                interaction.potential_drag_id = None;
+            }
         }
     }
 
@@ -183,6 +192,7 @@ pub(crate) fn interact(
 
                 interaction.potential_drag_id = None;
                 interaction.potential_click_id = None;
+                interaction.long_touch_pos = None;
                 dragged = None;
             }
         }
@@ -197,7 +207,12 @@ pub(crate) fn interact(
                 // This widget is sensitive to both clicks and drags.
                 // When the mouse first is pressed, it could be either,
                 // so we postpone the decision until we know.
+                // A finger held past a long touch drags it once it moves
+                // farther from where it was held than a click may move.
                 input.pointer.is_decidedly_dragging()
+                    && interaction
+                        .long_touch_pos
+                        .is_none_or(|held_at| input.pointer.is_farther_than_a_click_from(held_at))
             } else {
                 // This widget is just sensitive to drags, so we can mark it as dragged right away:
                 widget.sense.senses_drag()
@@ -205,6 +220,7 @@ pub(crate) fn interact(
 
             if is_dragged {
                 dragged = Some(widget.id);
+                interaction.long_touch_pos = None;
             }
         }
     }
@@ -216,6 +232,7 @@ pub(crate) fn interact(
     if !input.pointer.any_down() || input.pointer.latest_pos().is_none() {
         interaction.potential_click_id = None;
         interaction.potential_drag_id = None;
+        interaction.long_touch_pos = None;
     }
 
     // ------------------------------------------------------------------------
@@ -295,5 +312,155 @@ pub(crate) fn interact(
         drag_stopped,
         hovered,
         contains_pointer,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        Context, Event, Id, Modifiers, PointerButton, Pos2, RawInput, Rect, Sense, TouchDeviceId,
+        TouchId, TouchPhase, Vec2, pos2, vec2,
+    };
+
+    /// The events a touch screen integration reports for one finger at
+    /// `pos` in `phase`: the touch, and the pointer it moves and presses.
+    fn finger(phase: TouchPhase, pos: Pos2) -> Vec<Event> {
+        let touch = Event::Touch {
+            device_id: TouchDeviceId(1),
+            id: TouchId(1),
+            phase,
+            pos,
+            force: None,
+        };
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        match phase {
+            TouchPhase::Start => vec![touch, Event::PointerMoved(pos), button(true)],
+            TouchPhase::Move => vec![touch, Event::PointerMoved(pos)],
+            TouchPhase::End | TouchPhase::Cancel => vec![touch, button(false), Event::PointerGone],
+        }
+    }
+
+    /// What one widget sensing `sense` over the middle of the screen read
+    /// through a gesture.
+    #[derive(Default)]
+    struct Reading {
+        long_touched: usize,
+        secondary_clicked: usize,
+        drag_started: usize,
+        dragged_by: Vec2,
+    }
+
+    /// Run a finger over a widget sensing `sense`: pressed at its centre,
+    /// held still for `hold` seconds, then moved `motion` points in ten
+    /// steps and lifted, at a pass every tenth of a second.
+    fn gesture(sense: Sense, hold: f64, motion: Vec2) -> Reading {
+        let ctx = Context::default();
+        let rect = Rect::from_min_size(pos2(50.0, 50.0), vec2(100.0, 100.0));
+        let at = rect.center();
+        let mut reading = Reading::default();
+        let mut time = 0.0;
+        let pass = |events: Vec<Event>, time: f64, reading: &mut Reading| {
+            let input = RawInput {
+                time: Some(time),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let response = ui.interact(rect, Id::new("widget"), sense);
+                reading.long_touched += usize::from(response.long_touched());
+                reading.secondary_clicked += usize::from(response.secondary_clicked());
+                reading.drag_started += usize::from(response.drag_started());
+                if response.dragged() {
+                    reading.dragged_by += response.drag_delta();
+                }
+            });
+        };
+        pass(Vec::new(), time, &mut reading);
+        time += 0.1;
+        pass(finger(TouchPhase::Start, at), time, &mut reading);
+        let held_until = time + hold;
+        while time < held_until {
+            time += 0.1;
+            pass(finger(TouchPhase::Move, at), time, &mut reading);
+        }
+        for step in 1..=10 {
+            time += 0.1;
+            let pos = at + motion * (step as f32 / 10.0);
+            pass(finger(TouchPhase::Move, pos), time, &mut reading);
+        }
+        time += 0.1;
+        pass(finger(TouchPhase::End, at + motion), time, &mut reading);
+        reading
+    }
+
+    #[test]
+    fn a_finger_held_then_moved_drags_a_widget_that_senses_drags() {
+        let reading = gesture(Sense::click_and_drag(), 1.0, vec2(0.0, -40.0));
+        assert_eq!(reading.long_touched, 1, "the hold is one long touch");
+        assert_eq!(
+            reading.secondary_clicked, 1,
+            "the hold is one secondary click"
+        );
+        assert_eq!(reading.drag_started, 1, "one drag starts");
+        // The drag starts once the finger is farther from where it was held
+        // than a click may move, and carries the motion from there.
+        assert_eq!(reading.dragged_by.x, 0.0);
+        assert!(
+            reading.dragged_by.y <= -30.0,
+            "dragged by {:?}",
+            reading.dragged_by
+        );
+    }
+
+    #[test]
+    fn a_finger_held_and_lifted_in_place_is_a_secondary_click_and_no_drag() {
+        let reading = gesture(Sense::click_and_drag(), 1.0, Vec2::ZERO);
+        assert_eq!(reading.long_touched, 1);
+        assert_eq!(reading.secondary_clicked, 1);
+        assert_eq!(
+            reading.drag_started, 0,
+            "a finger held in place drags nothing"
+        );
+        assert_eq!(reading.dragged_by, Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_finger_held_then_moved_within_a_click_drags_nothing() {
+        let reading = gesture(Sense::click_and_drag(), 1.0, vec2(0.0, -5.0));
+        assert_eq!(reading.long_touched, 1);
+        assert_eq!(reading.secondary_clicked, 1);
+        assert_eq!(reading.drag_started, 0);
+        assert_eq!(reading.dragged_by, Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_finger_moved_without_a_hold_drags_a_widget_that_senses_drags() {
+        let motion = vec2(0.0, -40.0);
+        let reading = gesture(Sense::click_and_drag(), 0.0, motion);
+        assert_eq!(reading.long_touched, 0);
+        assert_eq!(reading.secondary_clicked, 0);
+        assert_eq!(reading.drag_started, 1);
+        // The drag starts once the finger is past a click's reach, and
+        // carries the motion from there.
+        assert!(
+            reading.dragged_by.y <= -30.0,
+            "dragged by {:?}",
+            reading.dragged_by
+        );
+    }
+
+    #[test]
+    fn a_finger_held_on_a_widget_that_senses_clicks_alone_is_its_secondary_click() {
+        let reading = gesture(Sense::click(), 1.0, vec2(0.0, -40.0));
+        assert_eq!(reading.long_touched, 1);
+        assert_eq!(reading.secondary_clicked, 1);
+        assert_eq!(reading.drag_started, 0);
+        assert_eq!(reading.dragged_by, Vec2::ZERO);
     }
 }

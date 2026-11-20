@@ -1316,6 +1316,12 @@ impl PointerState {
         self.latest_pos
     }
 
+    /// Whether the pointer lies farther from `pos` than a click may move.
+    pub(crate) fn is_farther_than_a_click_from(&self, pos: Pos2) -> bool {
+        self.latest_pos
+            .is_some_and(|latest| latest.distance(pos) > self.options.max_click_dist)
+    }
+
     /// If it is a good idea to show a tooltip, where is pointer?
     #[inline(always)]
     pub fn hover_pos(&self) -> Option<Pos2> {

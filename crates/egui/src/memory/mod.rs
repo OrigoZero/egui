@@ -473,6 +473,12 @@ pub(crate) struct InteractionState {
     /// as that can only happen after the mouse has moved a bit
     /// (at least if the widget is interesated in both clicks and drags).
     pub potential_drag_id: Option<Id>,
+
+    /// Where a finger was held when its press became a long touch on
+    /// [`Self::potential_drag_id`], a widget sensing clicks and drags: the
+    /// widget is dragged once the finger moves farther from here than a
+    /// click may move.
+    pub long_touch_pos: Option<Pos2>,
 }
 
 /// Keeps tracks of what widget has keyboard focus
