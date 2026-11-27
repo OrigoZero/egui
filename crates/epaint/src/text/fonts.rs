@@ -701,6 +701,14 @@ impl FontsView<'_> {
         self.fonts.atlas.size()
     }
 
+    /// The font atlas the glyphs of a [`Galley`] laid out now are placed in,
+    /// read in place: its [`TextureAtlas::image`] holds every glyph's coverage
+    /// at the texel a galley's vertex UVs name.
+    #[inline]
+    pub fn texture_atlas(&self) -> &TextureAtlas {
+        &self.fonts.atlas
+    }
+
     /// Which font atlas the glyphs of a [`Galley`] laid out now are placed
     /// in: a value no other atlas of this process has had.
     ///
